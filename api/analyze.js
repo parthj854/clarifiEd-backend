@@ -1,4 +1,7 @@
 // api/analyze.js
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+
 export default async function handler(req, res) {
   // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,13 +22,30 @@ export default async function handler(req, res) {
     const { assignments, gradeLevel, subject, courseName, filesData } = req.body;
 
     console.log('📊 Received analysis request');
+    console.log('Grade:', gradeLevel, 'Subject:', subject);
     console.log('Files received:', filesData?.length || 0);
+
+    // READ STANDARDS FROM FILE
+    let standardsContent = '';
+    try {
+      // Read the standards file based on grade level and subject
+      const standardsPath = join(process.cwd(), 'standards', `grade${gradeLevel}-${subject.toLowerCase()}.txt`);
+      standardsContent = await readFile(standardsPath, 'utf-8');
+      console.log('✅ Loaded standards from file:', standardsPath);
+    } catch (err) {
+      console.error('❌ Could not read standards file:', err.message);
+      // Return error if standards file is missing
+      return res.status(400).json({ 
+        error: 'Standards file not found', 
+        message: `No standards file found for Grade ${gradeLevel} ${subject}. Please add the file: standards/grade${gradeLevel}-${subject.toLowerCase()}.txt` 
+      });
+    }
 
     // Build the content array for Claude
     const messageContent = [
       {
         type: 'text',
-        text: `You are an expert in California Common Core State Standards for Grade ${gradeLevel} Mathematics. 
+        text: `You are an expert in California Common Core State Standards for Grade ${gradeLevel} ${subject}. 
 
 Analyze this course's alignment with CA Common Core Standards:
 
@@ -52,80 +72,53 @@ ${filesData.map((f, i) => `${i + 1}. ${f.fileName} (from assignment: ${f.assignm
 Please READ ALL the attached PDF documents carefully to understand what mathematical content is being taught.
 ` : 'No documents were attached to analyze.'}
 
-CALIFORNIA COMMON CORE STANDARDS FOR GRADE 7 MATHEMATICS:
-The Grade 7 Math standards are organized into 5 domains:
-
-1. 7.RP - Ratios and Proportional Relationships
-   - 7.RP.1: Compute unit rates
-   - 7.RP.2.a: Decide if quantities are proportional
-   - 7.RP.2.b: Identify constant of proportionality
-   - 7.RP.2.c: Represent proportional relationships by equations
-   - 7.RP.2.d: Explain points on graphs
-   - 7.RP.3: Use proportions to solve multistep problems
-
-2. 7.NS - The Number System
-   - 7.NS.1: Add and subtract rational numbers
-   - 7.NS.2: Multiply and divide rational numbers
-   - 7.NS.3: Solve real-world problems with rational numbers
-
-3. 7.EE - Expressions and Equations
-   - 7.EE.1: Apply properties to linear expressions
-   - 7.EE.2: Rewrite expressions in different forms
-   - 7.EE.3: Solve multi-step problems
-   - 7.EE.4.a: Solve equations px + q = r
-   - 7.EE.4.b: Solve inequalities
-
-4. 7.G - Geometry
-   - 7.G.1: Scale drawings
-   - 7.G.2: Draw geometric shapes
-   - 7.G.3: Cross-sections of 3D figures
-   - 7.G.4: Circle formulas
-   - 7.G.5: Angle relationships
-   - 7.G.6: Area, volume, surface area
-
-5. 7.SP - Statistics and Probability
-   - 7.SP.1-2: Random sampling and inferences
-   - 7.SP.3-4: Compare populations
-   - 7.SP.5-8: Probability models and compound events
+CALIFORNIA COMMON CORE STANDARDS:
+${standardsContent}
 
 Provide a JSON response (ONLY JSON, no markdown) with this EXACT structure:
 {
   "score": <number 0-100>,
-  "summary": "<brief analysis>",
+  "summary": "<brief analysis based on actual content found in the documents>",
   "domains": {
-    "7.RP (Ratios)": <percentage>,
-    "7.NS (Number System)": <percentage>,
-    "7.EE (Expressions)": <percentage>,
-    "7.G (Geometry)": <percentage>,
-    "7.SP (Statistics)": <percentage>
+    "7.RP (Ratios)": <percentage 0-100>,
+    "7.NS (Number System)": <percentage 0-100>,
+    "7.EE (Expressions)": <percentage 0-100>,
+    "7.G (Geometry)": <percentage 0-100>,
+    "7.SP (Statistics)": <percentage 0-100>
   },
   "standardsMet": [
     {
       "code": "<exact standard code like 7.RP.1>",
       "description": "<what the standard requires>",
-      "evidence": "<which assignment/document addresses this and how>"
+      "evidence": "<which assignment/document addresses this, what page/section, and how it addresses the standard>"
     }
   ],
   "standardsNotMet": [
     {
       "code": "<exact standard code>",
       "description": "<what the standard requires>",
-      "importance": "<why this matters>",
-      "impact": "<impact on student learning>"
+      "importance": "<why this matters for student learning>",
+      "impact": "<impact on student learning and future math success>"
     }
   ],
   "recommendations": [
     {
       "priority": "<CRITICAL|HIGH|MEDIUM>",
       "standard": "<standard code(s)>",
-      "action": "<specific action to take>",
-      "timeframe": "<when to implement>",
-      "rationale": "<why this is important>"
+      "action": "<specific, actionable recommendation for addressing this gap>",
+      "timeframe": "<when to implement this>",
+      "rationale": "<why this is important and how it will help students>"
     }
   ]
 }
 
-Be thorough and specific. Base your analysis on the ACTUAL CONTENT in the documents, not just the assignment titles.`
+CRITICAL INSTRUCTIONS:
+1. Base your analysis ONLY on the ACTUAL CONTENT you can see in the attached PDF documents
+2. If you can read math problems, worksheets, or exercises in the PDFs, analyze what standards they address
+3. Provide specific evidence with page numbers or problem numbers when possible
+4. Be thorough - check ALL standards from the standards document provided
+5. If documents are not readable or not provided, clearly state this in the summary
+6. Do NOT make assumptions about what might be taught - only report what you can actually see in the materials`
       }
     ];
 
@@ -142,6 +135,8 @@ Be thorough and specific. Base your analysis on the ACTUAL CONTENT in the docume
         });
       });
     }
+
+    console.log('📤 Sending request to Claude API...');
 
     // Call Claude API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -185,6 +180,8 @@ Be thorough and specific. Base your analysis on the ACTUAL CONTENT in the docume
 
     const analysisResult = JSON.parse(cleanedText);
 
+    console.log('✅ Analysis complete');
+    
     return res.status(200).json(analysisResult);
   } catch (error) {
     console.error('Error:', error);
