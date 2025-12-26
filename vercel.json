@@ -1,7 +1,6 @@
 {
-  "version": 2,
   "functions": {
-    "api/analyze.js": {
+    "api/**/*.js": {
       "maxDuration": 60
     }
   }
