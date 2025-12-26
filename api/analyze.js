@@ -1,8 +1,6 @@
 // api/analyze.js
-// This is your Vercel serverless function
-
 export default async function handler(req, res) {
-  // Enable CORS - allow requests from your GitHub Pages
+  // Enable CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
@@ -18,18 +16,16 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { assignments, gradeLevel, subject, courseName } = req.body;
+    const { assignments, gradeLevel, subject, courseName, filesData } = req.body;
 
-    // Build the prompt for Claude
-    const assignmentDetails = assignments.map(a => ({
-      title: a.title,
-      description: a.description,
-      type: a.type,
-      points: a.maxPoints,
-      attachments: a.materials?.length || 0
-    }));
+    console.log('📊 Received analysis request');
+    console.log('Files received:', filesData?.length || 0);
 
-    const prompt = `You are an expert in California Common Core State Standards for Grade ${gradeLevel} Mathematics. 
+    // Build the content array for Claude
+    const messageContent = [
+      {
+        type: 'text',
+        text: `You are an expert in California Common Core State Standards for Grade ${gradeLevel} Mathematics. 
 
 Analyze this course's alignment with CA Common Core Standards:
 
@@ -37,8 +33,24 @@ COURSE: ${courseName}
 GRADE LEVEL: ${gradeLevel}
 SUBJECT: ${subject}
 
-ASSIGNMENTS (${assignments.length} total):
-${JSON.stringify(assignmentDetails, null, 2)}
+I'm providing you with ${assignments.length} assignments and ${filesData?.length || 0} attached documents (PDFs, worksheets, etc.).
+
+ASSIGNMENTS:
+${assignments.map((a, i) => `
+Assignment ${i + 1}:
+- Title: ${a.title}
+- Description: ${a.description || 'No description'}
+- Type: ${a.type}
+- Points: ${a.maxPoints}
+- Materials: ${a.materials?.length || 0} files
+`).join('\n')}
+
+${filesData && filesData.length > 0 ? `
+ATTACHED DOCUMENTS:
+${filesData.map((f, i) => `${i + 1}. ${f.fileName} (from assignment: ${f.assignmentTitle})`).join('\n')}
+
+Please READ ALL the attached PDF documents carefully to understand what mathematical content is being taught.
+` : 'No documents were attached to analyze.'}
 
 CALIFORNIA COMMON CORE STANDARDS FOR GRADE 7 MATHEMATICS:
 The Grade 7 Math standards are organized into 5 domains:
@@ -91,7 +103,7 @@ Provide a JSON response (ONLY JSON, no markdown) with this EXACT structure:
     {
       "code": "<exact standard code like 7.RP.1>",
       "description": "<what the standard requires>",
-      "evidence": "<which assignment addresses this and how>"
+      "evidence": "<which assignment/document addresses this and how>"
     }
   ],
   "standardsNotMet": [
@@ -113,7 +125,23 @@ Provide a JSON response (ONLY JSON, no markdown) with this EXACT structure:
   ]
 }
 
-Be thorough and specific. List ALL standards that are not met.`;
+Be thorough and specific. Base your analysis on the ACTUAL CONTENT in the documents, not just the assignment titles.`
+      }
+    ];
+
+    // Add all the PDF files as documents
+    if (filesData && filesData.length > 0) {
+      filesData.forEach(file => {
+        messageContent.push({
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: file.base64
+          }
+        });
+      });
+    }
 
     // Call Claude API
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -125,11 +153,11 @@ Be thorough and specific. List ALL standards that are not met.`;
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 4000,
+        max_tokens: 8000,
         messages: [
           {
             role: 'user',
-            content: prompt
+            content: messageContent
           }
         ]
       })
